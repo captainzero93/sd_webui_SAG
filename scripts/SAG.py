@@ -265,7 +265,7 @@ class Script(scripts.Script):
             .repeat(1, latent_channel, 1, 1)
             .type(attn_map.dtype)
         )
-        attn_mask = F.interpolate(attn_mask, (latent_h, latent_w))
+        attn_mask = F.interpolate(attn_mask, (latent_h, latent_w), mode='nearest-exact')
 
         # Blur according to the self-attention mask
         if not sdxl:

@@ -324,7 +324,7 @@ class Script(scripts.Script):
             (scale, "SAG Guidance Scale"),
             (mask_threshold, "SAG Mask Threshold"),
             (blur_sigma, "SAG Blur Sigma"),
-            (method, lambda d: gr.Checkbox.update(value="Bilinear interpolation" in d)))
+            (method, lambda d: gr.Checkbox.update(value="SAG bilinear interpolation" in d)))
         return [enabled, scale, mask_threshold, blur_sigma, method]
 
     def process(self, p: StableDiffusionProcessing, *args, **kwargs):
@@ -348,7 +348,7 @@ class Script(scripts.Script):
             p.extra_generation_params["SAG Guidance Scale"] = scale
             p.extra_generation_params["SAG Mask Threshold"] = mask_threshold
             p.extra_generation_params["SAG Blur Sigma"] = blur_sigma
-            p.extra_generation_params["Bilinear interpolation"] = method
+            p.extra_generation_params["SAG bilinear interpolation"] = method
         else:
             sag_enabled = False
 

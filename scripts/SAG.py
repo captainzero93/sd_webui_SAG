@@ -175,6 +175,7 @@ current_sag_guidance_scale = 1.0
 sag_enabled = False
 sag_mask_threshold = 1.0
 sag_blur_sigma = 1.0
+sag_method_bilinear = False
 
 current_xin = None
 current_outsize = (64,64)
@@ -265,7 +266,8 @@ class Script(scripts.Script):
             .repeat(1, latent_channel, 1, 1)
             .type(attn_map.dtype)
         )
-        attn_mask = F.interpolate(attn_mask, (latent_h, latent_w), mode='nearest-exact')
+        filter = "nearest-exact" if not sag_method_bilinear else "bilinear"
+        attn_mask = F.interpolate(attn_mask, (latent_h, latent_w), mode=filter)
 
         # Blur according to the self-attention mask
         if not sdxl:
@@ -307,6 +309,7 @@ class Script(scripts.Script):
         with gr.Accordion('Self Attention Guidance', open=False):
             with gr.Row():
                 enabled = gr.Checkbox(value=False, label="Enable Self Attention Guidance")
+                method = gr.Checkbox(value=False, label="Use bilinear interpolation")
             with gr.Group() as accordion:
                 scale = gr.Slider(label='Guidance Scale', minimum=-2.0, maximum=10.0, step=0.01, value=0.75)
                 mask_threshold = gr.Slider(label='Mask Threshold', minimum=0.0, maximum=2.0, step=0.01, value=1.0)
@@ -320,16 +323,18 @@ class Script(scripts.Script):
             (enabled, lambda d: gr.Checkbox.update(value="SAG Guidance Enabled" in d)),
             (scale, "SAG Guidance Scale"),
             (mask_threshold, "SAG Mask Threshold"),
-            (blur_sigma, "SAG Blur Sigma"))
-        return [enabled, scale, mask_threshold, blur_sigma]
+            (blur_sigma, "SAG Blur Sigma"),
+            (method, lambda d: gr.Checkbox.update(value="Bilinear interpolation" in d)))
+        return [enabled, scale, mask_threshold, blur_sigma, method]
 
     def process(self, p: StableDiffusionProcessing, *args, **kwargs):
-        enabled, scale, mask_threshold, blur_sigma = args
+        enabled, scale, mask_threshold, blur_sigma, method = args
         global sag_enabled, sag_mask_threshold
         if enabled:
             sag_enabled = True
             sag_mask_threshold = mask_threshold
             sag_blur_sigma = blur_sigma
+            sag_method_bilinear = method
             global current_sag_guidance_scale
             current_sag_guidance_scale = scale
             global saved_original_selfattn_forward
@@ -343,6 +348,7 @@ class Script(scripts.Script):
             p.extra_generation_params["SAG Guidance Scale"] = scale
             p.extra_generation_params["SAG Mask Threshold"] = mask_threshold
             p.extra_generation_params["SAG Blur Sigma"] = blur_sigma
+            p.extra_generation_params["Bilinear interpolation"] = method
         else:
             sag_enabled = False
 
@@ -354,7 +360,7 @@ class Script(scripts.Script):
         return
 
     def postprocess(self, p, processed, *args):
-        enabled, scale, sag_mask_threshold, blur_sigma = args
+        enabled, scale, sag_mask_threshold, blur_sigma, method = args
         if enabled:
             # restore original self attention module forward function
             attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1

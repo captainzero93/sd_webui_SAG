@@ -158,7 +158,8 @@ def xattn_forward_log(self, x, context=None, mask=None, additional_tokens=None, 
     self.attn_probs = sim
     global current_selfattn_map
     current_selfattn_map = sim
-
+    
+    sim = sim.to(dtype=v.dtype)
     out = einsum('b i j, b j d -> b i d', sim, v)
     out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
     out = self.to_out(out)

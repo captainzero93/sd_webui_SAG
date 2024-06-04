@@ -233,6 +233,11 @@ class Script(scripts.Script):
         current_uncond_emb = parms.text_uncond
         current_sigma = parms.sigma
         current_image_cond_in = parms.image_cond
+
+        global current_max_sigma
+        if params.sampling_step == 0:
+            current_max_sigma = current_sigma[-current_batch_size:][0]
+        
         global current_unet_kwargs
         current_unet_kwargs = {
             "sigma": current_sigma[-current_batch_size:],

@@ -177,7 +177,10 @@ sag_enabled = False
 sag_mask_threshold = 1.0
 sag_blur_sigma = 1.0
 sag_method_bilinear = False
+sag_attn_target = ""
 
+current_max_sigma = 0.0
+current_sag_block_index = -1
 current_xin = None
 current_outsize = (64,64)
 current_batch_size = 1
@@ -237,6 +240,32 @@ class Script(scripts.Script):
             "text_uncond": current_uncond_emb,
         }
 
+        global saved_original_selfattn_forward
+        global current_sag_block_index
+        # replace target self attention module in unet with ours
+        if sag_attn_target == "dynamic":
+            if current_sag_block_index == -1:
+                org_attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+                saved_original_selfattn_forward = org_attn_module.forward
+                org_attn_module.forward = xattn_forward_log.__get__(org_attn_module,org_attn_module.__class__)
+                current_sag_block_index = 0
+            elif current_unet_kwargs['sigma'] < current_max_sigma / 4:
+                if current_sag_block_index == 1:
+                    attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
+                    attn_module.forward = saved_original_selfattn_forward
+                    org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
+                    saved_original_selfattn_forward = org_attn_module.forward
+                    org_attn_module.forward = xattn_forward_log.__get__(org_attn_module,org_attn_module.__class__)
+                    current_sag_block_index = 2
+            elif current_unet_kwargs['sigma'] < current_max_sigma / 2:
+                if current_sag_block_index == 0:
+                    attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+                    attn_module.forward = saved_original_selfattn_forward
+                    org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
+                    saved_original_selfattn_forward = org_attn_module.forward
+                    org_attn_module.forward = xattn_forward_log.__get__(org_attn_module,org_attn_module.__class__)
+                    current_sag_block_index = 1
+
     def denoised_callback(self, params: CFGDenoisedParams):
         if not sag_enabled:
             return
@@ -253,10 +282,18 @@ class Script(scripts.Script):
         b, latent_channel, latent_h, latent_w = original_latents.shape
         h=8
         sdxl=False
+
+        block_scale = 1
+        if sag_attn_target == "dynamic":
+            block_scale = 2 ** current_sag_block_index
+        elif sag_attn_target == "block5":
+            block_scale = 2
+        elif sag_attn_target == "block8":
+            block_scale = 4
         
-        middle_layer_latent_size = [math.ceil(latent_h/8), math.ceil(latent_w/8)]
+        middle_layer_latent_size = [math.ceil(latent_h/h) * block_scale, math.ceil(latent_w/h) * block_scale]
         if (middle_layer_latent_size[0] * middle_layer_latent_size[1] < hw1):
-            middle_layer_latent_size = [math.ceil(latent_h/4), math.ceil(latent_w/4)]
+            middle_layer_latent_size = [math.ceil(latent_h/(h/2)) * block_scale, math.ceil(latent_w/(h/2)) * block_scale]
             sdxl=True
 
         attn_map = attn_map.reshape(b, h, hw1, hw2)
@@ -302,7 +339,6 @@ class Script(scripts.Script):
     def cfg_after_cfg_callback(self, params: AfterCFGCallbackParams):
         if not sag_enabled:
             return
-
         params.x = params.x + (current_uncond_pred - (current_degraded_pred + current_degraded_pred_compensation)) * float(current_sag_guidance_scale)
         params.output_altered = True
 
@@ -311,45 +347,53 @@ class Script(scripts.Script):
             with gr.Row():
                 enabled = gr.Checkbox(value=False, label="Enable Self Attention Guidance")
                 method = gr.Checkbox(value=False, label="Use bilinear interpolation")
-            with gr.Group() as accordion:
+                attn = gr.Dropdown(label="Attention target", choices=["middle", "block5", "block8", "dynamic"], value="middle")	
+            with gr.Group():
                 scale = gr.Slider(label='Guidance Scale', minimum=-2.0, maximum=10.0, step=0.01, value=0.75)
                 mask_threshold = gr.Slider(label='Mask Threshold', minimum=0.0, maximum=2.0, step=0.01, value=1.0)
                 blur_sigma = gr.Slider(label='Gaussian Blur Sigma', minimum=0.0, maximum=10.0, step=0.01, value=1.0)
                 enabled.change(
-                    fn=lambda x: {"visible": x, "__type__": "update"},
+                    fn=None,
                     inputs=[enabled],
-                    outputs=[accordion],
                     show_progress = False)
         self.infotext_fields = (
             (enabled, lambda d: gr.Checkbox.update(value="SAG Guidance Enabled" in d)),
             (scale, "SAG Guidance Scale"),
             (mask_threshold, "SAG Mask Threshold"),
             (blur_sigma, "SAG Blur Sigma"),
-            (method, lambda d: gr.Checkbox.update(value="SAG bilinear interpolation" in d)))
-        return [enabled, scale, mask_threshold, blur_sigma, method]
+            (method, lambda d: gr.Checkbox.update(value="SAG bilinear interpolation" in d)),
+            (attn, "SAG Attention Target"))
+        return [enabled, scale, mask_threshold, blur_sigma, method, attn]
 
     def process(self, p: StableDiffusionProcessing, *args, **kwargs):
-        enabled, scale, mask_threshold, blur_sigma, method = args
+        enabled, scale, mask_threshold, blur_sigma, method, attn = args
         global sag_enabled, sag_mask_threshold
         if enabled:
             sag_enabled = True
             sag_mask_threshold = mask_threshold
             sag_blur_sigma = blur_sigma
             sag_method_bilinear = method
+            sag_attn_target = attn
             global current_sag_guidance_scale
             current_sag_guidance_scale = scale
             global saved_original_selfattn_forward
             # replace target self attention module in unet with ours
-
-            org_attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
-            saved_original_selfattn_forward = org_attn_module.forward
-            org_attn_module.forward = xattn_forward_log.__get__(org_attn_module,org_attn_module.__class__)
+            if attn != "dynamic":
+                if attn == "middle":
+                    org_attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+                elif attn == "block5":
+                    org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
+                elif attn == "block8":
+                    org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
+                saved_original_selfattn_forward = org_attn_module.forward
+                org_attn_module.forward = xattn_forward_log.__get__(org_attn_module,org_attn_module.__class__)
 
             p.extra_generation_params["SAG Guidance Enabled"] = enabled
             p.extra_generation_params["SAG Guidance Scale"] = scale
             p.extra_generation_params["SAG Mask Threshold"] = mask_threshold
             p.extra_generation_params["SAG Blur Sigma"] = blur_sigma
             p.extra_generation_params["SAG bilinear interpolation"] = method
+            p.extra_generation_params["SAG Attention Target"] = attn
         else:
             sag_enabled = False
 
@@ -361,10 +405,26 @@ class Script(scripts.Script):
         return
 
     def postprocess(self, p, processed, *args):
-        enabled, scale, sag_mask_threshold, blur_sigma, method = args
+        enabled, scale, sag_mask_threshold, blur_sigma, method, attn = args
         if enabled:
             # restore original self attention module forward function
-            attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+            if attn == "middle":
+                attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+            elif attn == "block5":
+                attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
+            elif attn == "block8":
+                attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
+
+            global current_sag_block_index
+            if attn == "dynamic":
+                if current_sag_block_index == 0:
+                    attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+                elif current_sag_block_index == 1:
+                    attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
+                elif current_sag_block_index == 2:
+                    attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
+                current_sag_block_index = -1
+
             attn_module.forward = saved_original_selfattn_forward
         return
 

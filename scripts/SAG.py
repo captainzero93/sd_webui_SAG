@@ -254,7 +254,7 @@ class Script(scripts.Script):
                 saved_original_selfattn_forward = org_attn_module.forward
                 org_attn_module.forward = xattn_forward_log.__get__(org_attn_module,org_attn_module.__class__)
                 current_sag_block_index = 0
-            elif current_unet_kwargs['sigma'] < current_max_sigma / 5: #4:
+            elif current_unet_kwargs['sigma'] < current_max_sigma / 6.25: #4:
                 if current_sag_block_index == 1:
                     attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
                     attn_module.forward = saved_original_selfattn_forward

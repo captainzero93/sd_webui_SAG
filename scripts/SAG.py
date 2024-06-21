@@ -331,7 +331,7 @@ class Script(scripts.Script):
     def denoiser_callback(self, params: CFGDenoiserParams):
         if not sag_enabled:
             return
-    
+
         global current_xin, current_batch_size, current_max_sigma, current_sag_block_index, current_unet_kwargs, sag_attn_target
 
         current_batch_size = params.text_uncond.shape[0]
@@ -343,41 +343,44 @@ class Script(scripts.Script):
         if params.sampling_step == 0:
             current_max_sigma = current_sigma[-current_batch_size:][0]
             current_sag_block_index = -1
-         
+
         current_unet_kwargs = {
             "sigma": current_sigma[-current_batch_size:],
             "image_cond": current_image_cond_in[-current_batch_size:],
             "text_uncond": current_uncond_emb,
         }
-         
+
         # Initialize current_degraded_pred when params is available
-        global current_degraded_pred 
-        if current_degraded_pred is None: # Check if it's the first call
+        global current_degraded_pred
+        if current_degraded_pred is None:  # Check if it's the first call
             current_degraded_pred = torch.zeros_like(params.x)
-           
+
         global saved_original_selfattn_forward
         if sag_attn_target == "dynamic":
             if current_sag_block_index == -1:
-                org_attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+                org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.middle_block, '1')
                 saved_original_selfattn_forward = org_attn_module.forward
                 org_attn_module.forward = xattn_forward_log.__get__(org_attn_module, org_attn_module.__class__)
                 current_sag_block_index = 0
             elif torch.any(current_unet_kwargs['sigma'] < current_max_sigma / 6.25):
                 if current_sag_block_index == 1:
-                    attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
+                    attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[5], '0')
                     attn_module.forward = saved_original_selfattn_forward
+
+                    # Handle output_blocks[8] with potential attribute error
+                    try:
+                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8].transformer_blocks._modules['0'].attn1
+                    except AttributeError:
+                        org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[8], '0')
 
                     # Handle potential variations in SDXL architecture
                     if shared.sd_model.is_sdxl:
-                        if hasattr(shared.sd_model.model.diffusion_model.output_blocks[8], 'resnets'):  
-                            org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8].resnets[1].spatial_transformer.transformer_blocks._modules['0'].attn1
+                        if hasattr(org_attn_module, 'resnets'):  
+                            org_attn_module = org_attn_module.resnets[1].spatial_transformer.transformer_blocks._modules['0'].attn1
                         else:
                             # If spatial_transformer not present, use standard SDXL attention block location
-                            org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8].transformer_blocks._modules['0'].attn1
-                    else:
-                        # Non-SDXL logic
-                        org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[8], '0')
-                   
+                            pass
+
                     saved_original_selfattn_forward = org_attn_module.forward
                     org_attn_module.forward = xattn_forward_log.__get__(org_attn_module, org_attn_module.__class__)
                     current_sag_block_index = 2
@@ -385,20 +388,19 @@ class Script(scripts.Script):
             # Handle the absence of '1' for the output_blocks[5] module 
             elif torch.any(current_unet_kwargs['sigma'] < current_max_sigma / 2.5):
                 if current_sag_block_index == 0:
-                    attn_module = shared.sd_model.model.diffusion_model.middle_block._modules['1'].transformer_blocks._modules['0'].attn1
+                    attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.middle_block, '1')
                     attn_module.forward = saved_original_selfattn_forward
 
                     # Access transformer_blocks directly for output_blocks[5]
                     org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[5], '0')
-
+                    
                     saved_original_selfattn_forward = org_attn_module.forward
                     org_attn_module.forward = xattn_forward_log.__get__(org_attn_module, org_attn_module.__class__)
                     current_sag_block_index = 1
 
-         
-        if current_degraded_pred is None: # Check if it's the first call
+        if current_degraded_pred is None:  # Check if it's the first call
             current_degraded_pred = torch.zeros_like(params.x)
-          
+              
     def denoised_callback(self, params: CFGDenoisedParams):
         global current_degraded_pred_compensation, current_degraded_pred
 

@@ -332,7 +332,7 @@ class Script(scripts.Script):
         if not sag_enabled:
             return
 
-        global current_xin, current_batch_size, current_max_sigma, current_sag_block_index, current_unet_kwargs, sag_attn_target
+        global current_xin, current_batch_size, current_max_sigma, current_sag_block_index, current_unet_kwargs, sag_attn_target, current_sigma
 
         current_batch_size = params.text_uncond.shape[0]
         current_xin = params.x[-current_batch_size:]
@@ -367,19 +367,17 @@ class Script(scripts.Script):
                     attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[5], '0')
                     attn_module.forward = saved_original_selfattn_forward
 
-                    # Handle output_blocks[8] with potential attribute error
+                    # Fallback logic for block8
                     try:
                         org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8].transformer_blocks._modules['0'].attn1
+                        # Handle potential variations in SDXL architecture
+                        if shared.sd_model.is_sdxl:
+                            if hasattr(org_attn_module, 'resnets'):  
+                                org_attn_module = org_attn_module.resnets[1].spatial_transformer.transformer_blocks._modules['0'].attn1
                     except AttributeError:
-                        org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[8], '0')
-
-                    # Handle potential variations in SDXL architecture
-                    if shared.sd_model.is_sdxl:
-                        if hasattr(org_attn_module, 'resnets'):  
-                            org_attn_module = org_attn_module.resnets[1].spatial_transformer.transformer_blocks._modules['0'].attn1
-                        else:
-                            # If spatial_transformer not present, use standard SDXL attention block location
-                            pass
+                        logger.warning("Attention layer not found in block8. Switching attention target to 'middle' block.")
+                        sag_attn_target = "middle"  # Change to middle block
+                        org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.middle_block, '1')
 
                     saved_original_selfattn_forward = org_attn_module.forward
                     org_attn_module.forward = xattn_forward_log.__get__(org_attn_module, org_attn_module.__class__)
@@ -391,9 +389,14 @@ class Script(scripts.Script):
                     attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.middle_block, '1')
                     attn_module.forward = saved_original_selfattn_forward
 
-                    # Access transformer_blocks directly for output_blocks[5]
-                    org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.output_blocks[5], '0')
-                    
+                    # Fallback logic for block5
+                    try:
+                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[5].transformer_blocks._modules['0'].attn1
+                    except AttributeError:
+                        logger.warning("Attention layer not found in block5. Switching attention target to 'middle' block.")
+                        sag_attn_target = "middle"  # Change to middle block
+                        org_attn_module = get_attention_module_for_block(shared.sd_model.model.diffusion_model.middle_block, '1')
+
                     saved_original_selfattn_forward = org_attn_module.forward
                     org_attn_module.forward = xattn_forward_log.__get__(org_attn_module, org_attn_module.__class__)
                     current_sag_block_index = 1

@@ -532,9 +532,10 @@ class Script(scripts.Script):
 
     def postprocess(self, p, processed, *args):
         enabled, scale, sag_mask_threshold, blur_sigma, method, attn, base_model, custom_resolution = args
-        if enabled:
-            attn_module = self.get_attention_module(attn)
-            attn_module.forward = saved_original_selfattn_forward
+        if enabled and hasattr(self, "saved_original_selfattn_forward"):  # Check if SAG was enabled and the forward method was saved
+            attn_module = self.get_attention_module(attn)  # Get the attention module
+            if attn_module is not None:  # Check if we successfully got the attention module
+                attn_module.forward = self.saved_original_selfattn_forward  # Restore the original forward method
         return
 
     def get_attention_module(self, attn):

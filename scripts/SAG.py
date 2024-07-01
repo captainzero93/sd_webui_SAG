@@ -428,7 +428,7 @@ class Script(scripts.Script):
                 math.ceil(latent_w / ((h/2) * block_scale))
             ]
 
-        # Get reference resolution based on selected base model
+        # Get reference resolution
         reference_resolution = self.custom_resolution
 
         # Calculate scale factor and adaptive mask threshold

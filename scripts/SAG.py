@@ -30,13 +30,6 @@ def default(val, d):
         return val
     return d() if isfunction(d) else d
 
-BASE_MODELS = {
-    "SD 1.5": 512,
-    "SD 2.1": 768,
-    "SDXL": 1024,
-    "Custom": None
-}
-
 def adaptive_gaussian_blur_2d(img, sigma, kernel_size=None):
     if kernel_size is None:
         kernel_size = max(5, int(sigma * 4 + 1))
@@ -239,7 +232,6 @@ def get_attention_module_for_block(block, layer_name):
 
 class Script(scripts.Script):
     def __init__(self):
-        self.base_model = "SD 1.5"
         self.custom_resolution = 512
 
     def title(self):
@@ -256,17 +248,9 @@ class Script(scripts.Script):
                 attn = gr.Dropdown(label="Attention target", choices=["middle", "block5", "block8", "dynamic"], value="middle")	
             with gr.Group():
                 scale = gr.Slider(label='Guidance Scale', minimum=-2.0, maximum=10.0, step=0.01, value=0.75)
-                mask_threshold = gr.Slider(label='Base Mask Threshold', minimum=0.0, maximum=2.0, step=0.01, value=1.0)
-                blur_sigma = gr.Slider(label='Base Blur Sigma', minimum=0.0, maximum=10.0, step=0.01, value=1.0)
-                 
-                base_model = gr.Dropdown(label="Base Model", choices=list(BASE_MODELS.keys()), value="SD 1.5")
-                custom_resolution = gr.Slider(label='Custom Reference Resolution', minimum=256, maximum=2048, step=64, value=512, visible=False)
-                 
-                def update_custom_resolution_visibility(model):
-                    return gr.Slider.update(visible=model == "Custom")
-                 
-                base_model.change(update_custom_resolution_visibility, inputs=[base_model], outputs=[custom_resolution])
-
+                mask_threshold = gr.Slider(label='Mask Threshold', minimum=0.0, maximum=2.0, step=0.01, value=1.0)
+                blur_sigma = gr.Slider(label='Gaussian Blur Sigma', minimum=0.0, maximum=10.0, step=0.01, value=1.0)
+                custom_resolution = gr.Slider(label='Base Reference Resolution', minimum=256, maximum=2048, step=64, value=512, info="Default base resolution for models: SD 1.5= 512, SD 2.1= 768, SDXL= 1024")
             enabled.change(fn=None, inputs=[enabled], show_progress=False)
          
         self.infotext_fields = (
@@ -276,16 +260,15 @@ class Script(scripts.Script):
             (blur_sigma, "SAG Blur Sigma"),
             (method, lambda d: gr.Checkbox.update(value="SAG bilinear interpolation" in d)),
             (attn, "SAG Attention Target"),
-            (base_model, "SAG Base Model"),
             (custom_resolution, "SAG Custom Resolution"))
-        return [enabled, scale, mask_threshold, blur_sigma, method, attn, base_model, custom_resolution]
+        return [enabled, scale, mask_threshold, blur_sigma, method, attn, custom_resolution]
     
     def reset_attention_target(self):
         global sag_attn_target
         sag_attn_target = self.original_attn_target
     
     def process(self, p: StableDiffusionProcessing, *args):
-        enabled, scale, mask_threshold, blur_sigma, method, attn, base_model, custom_resolution = args
+        enabled, scale, mask_threshold, blur_sigma, method, attn, custom_resolution = args
         global sag_enabled, sag_mask_threshold, sag_blur_sigma, sag_method_bilinear, sag_attn_target, current_sag_guidance_scale
          
         if enabled:
@@ -296,7 +279,6 @@ class Script(scripts.Script):
             self.original_attn_target = attn  # Save the original attention target
             sag_attn_target = attn
             current_sag_guidance_scale = scale
-            self.base_model = base_model
             self.custom_resolution = custom_resolution
            
             if attn != "dynamic":
@@ -313,7 +295,7 @@ class Script(scripts.Script):
                 "SAG bilinear interpolation": method,
                 "SAG Attention Target": attn,
                 "SAG Base Model": base_model,
-                "SAG Custom Resolution": custom_resolution if base_model == "Custom" else BASE_MODELS[base_model]
+                "SAG Custom Resolution": custom_resolution
             })
         else:
             sag_enabled = False
@@ -355,6 +337,7 @@ class Script(scripts.Script):
         if current_degraded_pred is None:  # Check if it's the first call
             current_degraded_pred = torch.zeros_like(params.x)
 
+        #6.25 and 2.5 are decided by testing, there might be better scale number
         global saved_original_selfattn_forward
         if sag_attn_target == "dynamic":
             if current_sag_block_index == -1:
@@ -369,7 +352,7 @@ class Script(scripts.Script):
 
                     # Fallback logic for block8
                     try:
-                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8].transformer_blocks._modules['0'].attn1
+                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
                         # Handle potential variations in SDXL architecture
                         if shared.sd_model.is_sdxl:
                             if hasattr(org_attn_module, 'resnets'):  
@@ -391,7 +374,7 @@ class Script(scripts.Script):
 
                     # Fallback logic for block5
                     try:
-                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[5].transformer_blocks._modules['0'].attn1
+                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[5]._modules['1'].transformer_blocks._modules['0'].attn1
                     except AttributeError:
                         logger.warning("Attention layer not found in block5. Switching attention target to 'middle' block.")
                         sag_attn_target = "middle"  # Change to middle block
@@ -446,7 +429,7 @@ class Script(scripts.Script):
             ]
 
         # Get reference resolution based on selected base model
-        reference_resolution = self.custom_resolution if self.base_model == "Custom" else BASE_MODELS[self.base_model]
+        reference_resolution = self.custom_resolution
 
         # Calculate scale factor and adaptive mask threshold
         scale_factor = math.sqrt((latent_h * latent_w) / (reference_resolution / 8) ** 2)
@@ -454,7 +437,7 @@ class Script(scripts.Script):
        
         # Calculate attention mask and ensure correct dimensions
         attn_mask = (attn_map.mean(1).sum(1) > adaptive_threshold).float()
-        attn_mask = F.interpolate(attn_mask.unsqueeze(1).unsqueeze(1), (latent_h, latent_w), mode=sag_method_bilinear and "bilinear" or "nearest").squeeze(1)
+        attn_mask = F.interpolate(attn_mask.unsqueeze(1).unsqueeze(1), (latent_h, latent_w), mode=="nearest-exact" if not sag_method_bilinear else "bilinear").squeeze(1)
 
         # Adaptive blur sigma and Gaussian blur
         adaptive_sigma = sag_blur_sigma * scale_factor
@@ -520,9 +503,10 @@ class Script(scripts.Script):
         # Ensure tensors have matching sizes
         if params.x.size() != current_uncond_pred.size() or params.x.size() != current_degraded_pred.size() or params.x.size() != current_degraded_pred_compensation.size():
             # Resize tensors to match params.x
-            current_uncond_pred_resized = F.interpolate(current_uncond_pred, size=params.x.shape[2:], mode='bilinear')
-            current_degraded_pred_resized = F.interpolate(current_degraded_pred, size=params.x.shape[2:], mode='bilinear')
-            current_degraded_pred_compensation_resized = F.interpolate(current_degraded_pred_compensation, size=params.x.shape[2:], mode='bilinear')
+            filter_method = "nearest-exact" if not sag_method_bilinear else "bilinear"
+            current_uncond_pred_resized = F.interpolate(current_uncond_pred, size=params.x.shape[2:], mode=filter_method)
+            current_degraded_pred_resized = F.interpolate(current_degraded_pred, size=params.x.shape[2:], mode=filter_method)
+            current_degraded_pred_compensation_resized = F.interpolate(current_degraded_pred_compensation, size=params.x.shape[2:], mode=filter_method)
            
             params.x = params.x + (current_uncond_pred_resized - (current_degraded_pred_resized + current_degraded_pred_compensation_resized)) * float(current_sag_guidance_scale)
         else:
@@ -531,7 +515,7 @@ class Script(scripts.Script):
         params.output_altered = True
 
     def postprocess(self, p, processed, *args):
-        enabled, scale, sag_mask_threshold, blur_sigma, method, attn, base_model, custom_resolution = args
+        enabled, scale, sag_mask_threshold, blur_sigma, method, attn, custom_resolution = args
         if enabled and hasattr(self, "saved_original_selfattn_forward"):  # Check if SAG was enabled and the forward method was saved
             attn_module = self.get_attention_module(attn)  # Get the attention module
             if attn_module is not None:  # Check if we successfully got the attention module

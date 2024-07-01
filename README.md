@@ -8,3 +8,4 @@ Demos:
 For SDXL model, adjust Blur Sigma around 0.34 to prevent blurry image    
 Bilinear interpolation: Attention mask is interpolated using bilinear method, resulting sharper image    
 Attention target: Choose the block Attention mask would apply to, `dynamic` means depending on noise sigma value
+Base resolution: Change attention mask resolution

@@ -353,7 +353,8 @@ class Script(scripts.Script):
 
                     # Fallback logic for block8
                     try:
-                        org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
+                        if shared.sd_model.is_sd1:
+                            org_attn_module = shared.sd_model.model.diffusion_model.output_blocks[8]._modules['1'].transformer_blocks._modules['0'].attn1
                         # Handle potential variations in SDXL architecture
                         if shared.sd_model.is_sdxl:
                             if hasattr(org_attn_module, 'resnets'):  

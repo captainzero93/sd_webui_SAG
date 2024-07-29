@@ -1,3 +1,4 @@
+Fixed as of 29/07/2024 main branch AUTOMATIC1111 
 - Fixed UI method indentation (oops!)
 - Added missing 'process' method - now SAG params show up in PNG info
 - Overhauled callback system - no more duplicate callbacks!
@@ -9,7 +10,7 @@
 - Made it play nice with SDXL
 - Added smart parameter scaling based on image size
 - Fixed tensor shape mismatches in cfg_after_cfg_callback
-- 
+
 # Implementation of Self Attention Guidance in webui
 https://arxiv.org/abs/2210.00939
 

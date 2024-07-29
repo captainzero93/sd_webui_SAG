@@ -234,12 +234,22 @@ def get_attention_module_for_block(block, layer_name):
 class Script(scripts.Script):
     def __init__(self):
         self.custom_resolution = 512
+        self.original_attn_target = "middle"  # Default value
+        self.callbacks_added = False
 
     def title(self):
         return "Self Attention Guidance"
 
     def show(self, is_img2img):
         return scripts.AlwaysVisible
+
+    def reset_attention_target(self):
+        global sag_attn_target
+        if hasattr(self, 'original_attn_target'):
+            sag_attn_target = self.original_attn_target
+        else:
+            sag_attn_target = "middle"
+            print("Warning: original_attn_target not set. Using default value.")
 
     def ui(self, is_img2img):
         with gr.Accordion('Self Attention Guidance', open=False):
@@ -253,25 +263,23 @@ class Script(scripts.Script):
                 blur_sigma = gr.Slider(label='Gaussian Blur Sigma', minimum=0.0, maximum=10.0, step=0.01, value=1.0)
                 custom_resolution = gr.Slider(label='Base Reference Resolution', minimum=256, maximum=2048, step=64, value=512, info="Default base resolution for models: SD 1.5= 512, SD 2.1= 768, SDXL= 1024")
             enabled.change(fn=None, inputs=[enabled], show_progress=False)
-         
-        self.infotext_fields = (
-            (enabled, lambda d: gr.Checkbox.update(value="SAG Guidance Enabled" in d)),
+     
+        self.infotext_fields = [
+            (enabled, "SAG Guidance Enabled"),
             (scale, "SAG Guidance Scale"),
             (mask_threshold, "SAG Mask Threshold"),
             (blur_sigma, "SAG Blur Sigma"),
-            (method, lambda d: gr.Checkbox.update(value="SAG bilinear interpolation" in d)),
+            (method, "SAG bilinear interpolation"),
             (attn, "SAG Attention Target"),
-            (custom_resolution, "SAG Custom Resolution"))
+            (custom_resolution, "SAG Custom Resolution")
+        ]
+    
         return [enabled, scale, mask_threshold, blur_sigma, method, attn, custom_resolution]
-    
-    def reset_attention_target(self):
-        global sag_attn_target
-        sag_attn_target = self.original_attn_target
-    
+
     def process(self, p: StableDiffusionProcessing, *args):
         enabled, scale, mask_threshold, blur_sigma, method, attn, custom_resolution = args
         global sag_enabled, sag_mask_threshold, sag_blur_sigma, sag_method_bilinear, sag_attn_target, current_sag_guidance_scale
-         
+     
         if enabled:
             sag_enabled = True
             sag_mask_threshold = mask_threshold
@@ -295,19 +303,18 @@ class Script(scripts.Script):
                 "SAG Blur Sigma": blur_sigma,
                 "SAG bilinear interpolation": method,
                 "SAG Attention Target": attn,
-                "SAG Base Model": base_model,
                 "SAG Custom Resolution": custom_resolution
             })
         else:
             sag_enabled = False
+            self.original_attn_target = "middle"  # Set a default value when SAG is not enabled
 
-        if not hasattr(self, 'callbacks_added'):
+        if not self.callbacks_added:
             on_cfg_denoiser(self.denoiser_callback)
             on_cfg_denoised(self.denoised_callback)
             on_cfg_after_cfg(self.cfg_after_cfg_callback)
             self.callbacks_added = True
 
-        # Reset attention target for each image
         self.reset_attention_target()
         return
 
@@ -439,8 +446,7 @@ class Script(scripts.Script):
        
         # Calculate attention mask and ensure correct dimensions
         attn_mask = (attn_map.mean(1).sum(1) > adaptive_threshold).float()
-        attn_mask = F.interpolate(attn_mask.unsqueeze(1).unsqueeze(1), (latent_h, latent_w), mode=="nearest-exact" if not sag_method_bilinear else "bilinear").squeeze(1)
-
+        attn_mask = F.interpolate(attn_mask.unsqueeze(1).unsqueeze(1), (latent_h, latent_w), mode="bilinear" if sag_method_bilinear else "nearest-exact").squeeze(1)
         # Adaptive blur sigma and Gaussian blur
         adaptive_sigma = sag_blur_sigma * scale_factor
         degraded_latents = adaptive_gaussian_blur_2d(original_latents, sigma=adaptive_sigma) * attn_mask.unsqueeze(1).expand_as(original_latents) + original_latents * (1 - attn_mask.unsqueeze(1).expand_as(original_latents))
@@ -518,12 +524,54 @@ class Script(scripts.Script):
 
     def postprocess(self, p, processed, *args):
         enabled, scale, sag_mask_threshold, blur_sigma, method, attn, custom_resolution = args
-        if enabled and hasattr(self, "saved_original_selfattn_forward"):  # Check if SAG was enabled and the forward method was saved
-            attn_module = self.get_attention_module(attn)  # Get the attention module
-            if attn_module is not None:  # Check if we successfully got the attention module
-                attn_module.forward = self.saved_original_selfattn_forward  # Restore the original forward method
+        if enabled and 'saved_original_selfattn_forward' in globals():
+            attn_module = self.get_attention_module(attn)
+            if attn_module is not None:
+                attn_module.forward = saved_original_selfattn_forward
         return
 
+    def process(self, p: StableDiffusionProcessing, *args):
+        enabled, scale, mask_threshold, blur_sigma, method, attn, custom_resolution = args
+        global sag_enabled, sag_mask_threshold, sag_blur_sigma, sag_method_bilinear, sag_attn_target, current_sag_guidance_scale
+     
+        if enabled:
+            sag_enabled = True
+            sag_mask_threshold = mask_threshold
+            sag_blur_sigma = blur_sigma
+            sag_method_bilinear = method
+            self.original_attn_target = attn  # Save the original attention target
+            sag_attn_target = attn
+            current_sag_guidance_scale = scale
+            self.custom_resolution = custom_resolution
+           
+            if attn != "dynamic":
+                org_attn_module = self.get_attention_module(attn)
+                global saved_original_selfattn_forward
+                saved_original_selfattn_forward = org_attn_module.forward
+                org_attn_module.forward = xattn_forward_log.__get__(org_attn_module, org_attn_module.__class__)
+
+            p.extra_generation_params.update({
+                "SAG Guidance Enabled": enabled,
+                "SAG Guidance Scale": scale,
+                "SAG Mask Threshold": mask_threshold,
+                "SAG Blur Sigma": blur_sigma,
+                "SAG bilinear interpolation": method,
+                "SAG Attention Target": attn,
+                "SAG Custom Resolution": custom_resolution
+            })
+        else:
+            sag_enabled = False
+            self.original_attn_target = "middle"  # Set a default value when SAG is not enabled
+
+        if not self.callbacks_added:
+            on_cfg_denoiser(self.denoiser_callback)
+            on_cfg_denoised(self.denoised_callback)
+            on_cfg_after_cfg(self.cfg_after_cfg_callback)
+            self.callbacks_added = True
+
+        self.reset_attention_target()
+        return
+    
     def get_attention_module(self, attn):
         try:
             if attn == "middle":

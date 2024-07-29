@@ -4,7 +4,7 @@ Fixed as of 29/07/2024 main branch AUTOMATIC1111
 - Overhauled callback system - no more duplicate callbacks!
 - Improved attention module handling for different SD versions
 - Added dynamic attention targeting - adapts as sampling progresses
-- Beefed up error handling and added some helpful logging
+- Beefed up error handling and added some better logging
 - Updated infotext fields for better UI-parameter mapping
 - Cleaned up global variable management
 - Made it play nice with SDXL

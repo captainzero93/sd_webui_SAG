@@ -1,4 +1,4 @@
-Fixed as of 29/07/2024 main branch AUTOMATIC1111 
+Fixed ( and improved) as of 29/07/2024 main branch AUTOMATIC1111 
 
 - Added missing 'process' method - now SAG params show up in PNG info
 - Overhauled callback system - no more duplicate callbacks!
